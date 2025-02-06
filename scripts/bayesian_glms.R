@@ -5,26 +5,23 @@ library(loo)
 library(projpred)
 library(posterior)
 library(bayesplot)
+library(modelr)
 library(corrplot)
+library(tidybayes)
+
 #Running Bayesian GLMs, performing model fits, and selecting important varaibles, using RSTANARM
 # This script mostly follows the vignette of: https://mc-stan.org/projpred/articles/projpred.html#modtypes
 
-
-# Load fst, the response variable
-
-# Sample metadata
-df_samples <- read.csv('~/Projects/AsGARD/metadata/cease_combinedmetadata_qcpass.20240914.csv')
-points <- df_samples %>%
-  dplyr::filter(country %in% c('Djibouti', 'Sudan', 'Ethiopia')) %>%
-  dplyr::select(longitude, latitude, location, country) %>%
-  unique()
-
 # Load data
 dd_analysis <- read.csv('~/Projects/AsGARD/data/environmental_modelling/environmental_data.csv')#Drop columns we don't want (cattle has too much missing data)
+data_vars <- dd_analysis[c('fst_lin','pdist','mean.wind.traveltime','slope.circuit','friction.circuit','evi.circuit','hurs.circuit','ele.circuit','mdr.circuit','pop.circuit')]
+
+
 
 #Corr mat
 tiff("~/Projects/AsGARD/figures/corrplot.tiff", units="in", width=5, height=5, res=300)
-corrplot(cor(dd_analysis))
+
+corrplot(cor(data_vars))
 dev.off()
 
 #Specify full model
@@ -37,12 +34,12 @@ p=dim(dd_analysis)[2]
 p0 <- 2 # prior guess for the number of relevant variables
 tau0 <- p0/(p-p0) * 1/sqrt(n)
 hs_prior <- hs(df=1, global_df=1, global_scale=tau0)
-t_prior <- student_t(df = 7, location = 0, scale = 2.5)
+t_prior <- student_t(df = 7, location = 0, scale = 1.5)
 
 post1 <- stan_glm(formula=fst_lin ~ pdist +mean.wind.traveltime+mdr.circuit + evi.circuit+pop.circuit+ele.circuit+hurs.circuit+friction.circuit, 
                   data = dd_analysis,
                   family = gaussian(link = "identity"),
-                  prior = hs_prior, prior_intercept = t_prior,
+                  prior = t_prior, prior_intercept = t_prior,
                   seed = 121347, adapt_delta = 0.999,
                   chains = 4, iter = 4000,
                   QR = TRUE, refresh = 0)
@@ -52,26 +49,32 @@ plot(post1)
 post2<-stan_glm(fst_lin ~ pdist+pop.circuit*pdist+mdr.circuit*pdist+slope.circuit*pdist+mean.wind.traveltime*pdist+ evi.circuit*pdist+hurs.circuit*pdist+ele.circuit*pdist,
     data = dd_analysis,
     family = gaussian(link = "identity"),
-    prior = hs_prior, prior_intercept = t_prior,
+    prior = t_prior, prior_intercept = t_prior,
     seed = 121347, adapt_delta = 0.999,
     chains = 4, iter = 4000,
-    QR = TRUE, refresh = 0)
+    QR = TRUE, refresh = 0,
+    cores = ncores)
 
 plot(post2)
 (loo2 <- loo(post2))
 
 loo_compare(loo1, loo2) #controlling for distance does not improve model fit
 
+
 #using the prior improves loo?
 
 # VAREIABLE SELECTION (takes ages)
+
+# Run selection
 varsel2 <- cv_varsel(post1, method='forward', cv_method='loo', nloo = n, nclusters_pred=100, ndraws_pred=2000, nterms_max=15, parallel=FALSE) #run variable selection (this takes quite a long time)
-(nsel<-suggest_size(varsel2))
+#plot variable importance
 plot(varsel2, stats = "mlpd", deltas = TRUE)+theme_classic()
 
+#Suggest optimal model size
 n_sel <- suggest_size(varsel2, stat = "mlpd") #get suggested no vars
 
-rk <- ranking(varsel2) #rank variable importance and plot
+#rank variable importance and plot
+rk <- ranking(varsel2) 
 ( pr_rk <- cv_proportions(rk) )  
 plot(pr_rk)
 plot(cv_proportions(rk, cumulate = TRUE))
@@ -91,6 +94,7 @@ prj_smmry <- summarize_draws(
   prj_drws,
   "median", "mad", function(x) quantile(x, probs = c(0.025, 0.975))
 )
+
 # Coerce to a `data.frame` because pkgdown versions > 1.6.1 don't print the
 # tibble correctly:
 prj_smmry <- as.data.frame(prj_smmry)
@@ -103,10 +107,10 @@ bayesplot_theme_set(ggplot2::theme_bw())
 
 
 #so a final sensible model looks like it may be
-postfinal <- stan_glm(formula=fst_lin ~  mean.wind.traveltime+mdr.circuit + evi.circuit+friction.circuit,
+postfinal <- stan_glm(formula=fst_lin_untransformed ~  mean.wind.traveltime+mdr.circuit + evi.circuit+friction.circuit,
                   data = dd_analysis,
                   family = gaussian(link = "identity"),
-                  prior = hs_prior, prior_intercept = t_prior,
+                  prior = t_prior, prior_intercept = t_prior,
                   seed = 121347, adapt_delta = 0.999,
                   chains = 4, iter = 4000,
                   QR = TRUE, refresh = 0)
@@ -115,21 +119,18 @@ posterior_plot <- mcmc_areas(as.matrix(postfinal),
                              prob = 0.95) + 
 ggtitle("Posterior Distributions with 95% Credible Intervals")
 posterior_plot
+##### plotting model predictions - individual submodels + predplots
 
-
-##### plotting model predictions
-
-#individual submodels + predplots
-
-m.wind <- stan_glm(formula=fst_lin ~  mean.wind.traveltime,
+#WIND
+m.wind <- stan_glm(formula=fst_lin_untransformed ~  mean.wind.traveltime,
                       data = dd_analysis,
                       family = gaussian(link = "identity"),
-                      prior = hs_prior, prior_intercept = t_prior,
+                      prior = t_prior, prior_intercept = t_prior,
                       seed = 121347, adapt_delta = 0.999,
                       chains = 4, iter = 4000)
 draws <- as.data.frame(as.matrix(m.wind))
 colnames(draws)[1:2] <- c("a", "b")
-ggplot(dd_analysis, aes(x = mean.wind.traveltime, y = fst_lin)) +
+windpred <- ggplot(dd_analysis, aes(x = mean.wind.traveltime, y = fst_lin_untransformed)) +
   geom_point(size = 1) +
   geom_abline(data = draws, aes(intercept = a, slope = b),
               color = "skyblue", size = 0.2, alpha = 0.25) +
@@ -138,16 +139,16 @@ ggplot(dd_analysis, aes(x = mean.wind.traveltime, y = fst_lin)) +
   theme_classic()
 
 
-
-m.mdr <- stan_glm(formula=fst_lin ~  mdr.circuit,
+#MDR
+m.mdr <- stan_glm(formula=fst_lin_untransformed ~  mdr.circuit,
                    data = dd_analysis,
                    family = gaussian(link = "identity"),
-                   prior = hs_prior, prior_intercept = t_prior,
+                   prior = t_prior, prior_intercept = t_prior,
                    seed = 121347, adapt_delta = 0.999,
                    chains = 4, iter = 4000)
 draws <- as.data.frame(as.matrix(m.mdr))
 colnames(draws)[1:2] <- c("a", "b")
-ggplot(dd_analysis, aes(x = mdr.circuit, y = fst_lin)) +
+mdrpred <- ggplot(dd_analysis, aes(x = mdr.circuit, y = fst_lin_untransformed)) +
   geom_point(size = 1) +
   geom_abline(data = draws, aes(intercept = a, slope = b),
               color = "skyblue", size = 0.2, alpha = 0.25) +
@@ -155,15 +156,16 @@ ggplot(dd_analysis, aes(x = mdr.circuit, y = fst_lin)) +
               color = "skyblue4", size = 1)+
   theme_classic()
 
-m.evi<- stan_glm(formula=fst_lin ~  evi.circuit,
+# EVI
+m.evi<- stan_glm(formula=fst_lin_untransformed ~  evi.circuit,
                   data = dd_analysis,
                   family = gaussian(link = "identity"),
-                  prior = hs_prior, prior_intercept = t_prior,
+                  prior = t_prior, prior_intercept = t_prior,
                   seed = 121347, adapt_delta = 0.999,
                   chains = 4, iter = 4000)
 draws <- as.data.frame(as.matrix(m.evi))
 colnames(draws)[1:2] <- c("a", "b")
-ggplot(dd_analysis, aes(x = evi.circuit, y = fst_lin)) +
+evipred <- ggplot(dd_analysis, aes(x = evi.circuit, y = fst_lin_untransformed)) +
   geom_point(size = 1) +
   geom_abline(data = draws, aes(intercept = a, slope = b),
               color = "skyblue", size = 0.2, alpha = 0.25) +
@@ -171,16 +173,16 @@ ggplot(dd_analysis, aes(x = evi.circuit, y = fst_lin)) +
               color = "skyblue4", size = 1)+
   theme_classic()
 
-
-m.fri<- stan_glm(formula=fst_lin ~  friction.circuit,
+# FRICTION
+m.fri<- stan_glm(formula=fst_lin_untransformed ~  friction.circuit,
                  data = dd_analysis,
                  family = gaussian(link = "identity"),
-                 prior = hs_prior, prior_intercept = t_prior,
+                 prior = t_prior, prior_intercept = t_prior,
                  seed = 121347, adapt_delta = 0.999,
                  chains = 4, iter = 4000)
 draws <- as.data.frame(as.matrix(m.fri))
 colnames(draws)[1:2] <- c("a", "b")
-ggplot(dd_analysis, aes(x = friction.circuit, y = fst_lin)) +
+fripred <- ggplot(dd_analysis, aes(x = friction.circuit, y = fst_lin_untransformed)) +
   geom_point(size = 1) +
   geom_abline(data = draws, aes(intercept = a, slope = b),
               color = "skyblue", size = 0.2, alpha = 0.25) +
@@ -188,6 +190,17 @@ ggplot(dd_analysis, aes(x = friction.circuit, y = fst_lin)) +
               color = "skyblue4", size = 1)+
   theme_classic()
 
+
+cowplot::plot_grid(windpred, evipred, fripred, mdrpred, nrow = 2, ncol = 2)
+ggsave(plot = last_plot(), filename = '~/Desktop/cowplot.png', width = 15, height = 15,)
+
+dd_analysis %>%
+  data_grid(mean.wind.traveltime = seq_range(mean.wind.traveltime, n = 101)) %>%
+  add_epred_draws(m.wind) %>%
+  ggplot(aes(x = mean.wind.traveltime, y = fst_lin_untransformed)) +
+  stat_lineribbon(aes(y = .epred), .width = c(.95, .80, .50), alpha = 1/4) +
+  geom_point(data = dd_analysis)+
+  theme_classic()
 
 
 
