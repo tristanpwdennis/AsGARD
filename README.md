@@ -1,13 +1,13 @@
 # AsGARD
 ## *An. stephensi* Genomics and Resistance Diagnostics
 
-This repo will contains analysis code supporting the CEASE (https://www.ceasemalaria.org) genomics work package.
+This repo contains analysis code supporting the CEASE (https://www.ceasemalaria.org) genomics work package.
 
 Tristan Dennis, 2024
 
 ## The data.
 
-We have generated a mature catalogue of single nucleotide polymorphism (SNP), phased haplotype, and copy number variant (CNV) calls, for 475 _An. stephensi_ samples. In addition, we have generated an accessibility mask and draft recombination map. This genomic toolkit will be made freely accessible to to download and analyse. We are still finalising the particulars of storage and availability, but more information will be available soon. The raw reads have been uploaded to ENA but are embargoed until we submit our preprint.
+We have generated a mature catalogue of single nucleotide polymorphism (SNP), phased haplotype, and copy number variant (CNV) calls, for 511 _An. stephensi_ samples. In addition, we have generated an accessibility mask and draft recombination map. This genomic toolkit will be made freely accessible to to download and analyse. We are still finalising the particulars of storage and availability, but more information will be available soon. The raw reads have been uploaded to ENA but are embargoed until we submit our preprint.
 
 ## Variant discovery and format.
 
